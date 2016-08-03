@@ -1,0 +1,9 @@
+[package]
+name = "stockfighter"
+version = "0.1.0"
+authors = ["Herman J. Radtke III <herman@hermanradtke.com>"]
+
+[dependencies]
+nom = "1.2.4"
+stockfighter-sdk-rs = "0.0.2"
+copperline = { git = "https://github.com/srijs/rust-copperline", rev = "5c12bbe" }
