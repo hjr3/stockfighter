@@ -2,10 +2,11 @@
 extern crate nom;
 extern crate copperline;
 extern crate stockfighter;
+extern crate env_logger;
 
-use nom::{IResult, space, alphanumeric};
+use nom::{IResult, space, alphanumeric, digit};
 use copperline::Copperline;
-use stockfighter::Stockfighter;
+use stockfighter::{Stockfighter, OrderDirection, OrderType};
 
 #[derive(Debug, Eq, PartialEq)]
 enum Command {
@@ -13,11 +14,31 @@ enum Command {
     Quote,
     ListStocks,
     OrderBook,
-    NewOrder,
+    OrderBuy,
+    OrderSell,
     StatusOrder,
     CancelOrder,
+    TickerTape,
     Unknown,
 }
+
+// Parse a numerical array into a string and then from a string into a number
+named!(usize_digit<usize>,
+    map_res!(
+        map_res!(
+            digit,
+            std::str::from_utf8
+        ),
+        std::str::FromStr::from_str
+    )
+);
+
+named!(an_string<&str>,
+    map_res!(
+        alphanumeric,
+        std::str::from_utf8
+    )
+);
 
 named!(commands<&[u8], Command>,
     alt!(
@@ -25,20 +46,52 @@ named!(commands<&[u8], Command>,
         tag!("quote") => { |_| Command::Quote } |
         tag!("list") => { |_| Command::ListStocks } |
         tag!("book") => { |_| Command::OrderBook } |
-        tag!("new") => { |_| Command::NewOrder } |
+        tag!("buy") => { |_| Command::OrderBuy } |
+        tag!("sell") => { |_| Command::OrderSell } |
         tag!("status") => { |_| Command::StatusOrder } |
-        tag!("cancel") => { |_| Command::CancelOrder }
+        tag!("cancel") => { |_| Command::CancelOrder } |
+        tag!("ticker") => { |_| Command::TickerTape }
     )
 );
 
-named!(quote<&[u8], (&str,&str)>,
+named!(venue_stock<&[u8], (&str, &str)>,
     chain!(
         space? ~
-        venue: map_res!(alphanumeric, std::str::from_utf8) ~
+        venue: an_string ~
         space? ~
-        stock: map_res!(alphanumeric, std::str::from_utf8) ,
+        stock: an_string ,
 
         || (venue, stock)
+    )
+);
+
+named!(account_venue_stock<&[u8], (&str, &str, &str)>,
+    chain!(
+        space? ~
+        account: an_string ~
+        space? ~
+        venue: an_string ~
+        space? ~
+        stock: an_string ,
+
+        || (account, venue, stock)
+    )
+);
+
+named!(order_buy<&[u8], (&str, &str, &str, usize, usize)>,
+    chain!(
+        space? ~
+        account: an_string ~
+        space? ~
+        venue: an_string ~
+        space? ~
+        stock: an_string ~
+        space? ~
+        price: usize_digit ~
+        space? ~
+        qty: usize_digit ,
+
+        || (account, venue, stock, price, qty)
     )
 );
 
@@ -49,12 +102,31 @@ fn handle(line: &str) {
         IResult::Incomplete(_) => (&b""[..], Command::Unknown),
     };
 
-    let sf = Stockfighter::new("test");
+    let sf = Stockfighter::new("b6eb6d0a2b606c02c8b027fca35383fb2dc741d3");
     match command {
         Command::Quote => {
-            let (_, (stock, venue)) = quote(args).unwrap();
-            let quote = sf.quote(stock, venue);
+            let (_, (venue, stock)) = venue_stock(args).unwrap();
+            let quote = sf.quote(venue, stock);
             println!("quote = {:?}", quote);
+        }
+        Command::TickerTape => {
+            let (_, (account, venue, stock)) = account_venue_stock(args).unwrap();
+            let handle = sf.ticker_tape_venue_stock_with(account, venue, stock, |quote| println!("{:?}", quote));
+            let _ = handle.unwrap().join();
+        }
+        Command::OrderBuy => {
+            match order_buy(args) {
+                IResult::Done(_, (account, venue, stock, price, qty)) => {
+                    let order = sf.new_order(account, venue, stock, price, qty, OrderDirection::buy, OrderType::Limit).unwrap();
+                    println!("order = {:?}", order);
+                }
+                IResult::Error(_) => {
+                    panic!("Error parsing arguments for OrderBuy");
+                }
+                IResult::Incomplete(i) => {
+                    println!("Syntax error: {:?}", i);
+                }
+            }
         }
         Command::Unknown => {
             println!("Command '{}' is not known", line);
@@ -67,6 +139,8 @@ fn handle(line: &str) {
 
 
 fn main() {
+    env_logger::init().expect("Failed to start logger");
+
     let cfg = copperline::Config {
         encoding: copperline::Encoding::Utf8,
         mode: copperline::EditMode::Vi
